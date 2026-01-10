@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 export async function POST(request: NextRequest) {
+  let text = '';
+  
   try {
-    const { text, targetLang } = await request.json();
+    const body = await request.json();
+    text = body.text;
+    const targetLang = body.targetLang;
 
     const apiKey = process.env.GOOGLE_TRANSLATE_API_KEY;
     
@@ -41,9 +45,8 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error('Translation error:', error);
-    const { text } = await request.json();  // 
     return NextResponse.json({ 
-      translatedText: text,
+      translatedText: text || '',
       error: error.message 
     }, { status: 500 });
   }
