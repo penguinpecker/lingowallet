@@ -27,9 +27,6 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           theme: 'dark',
           accentColor: '#9333EA',
         },
-        embeddedWallets: {
-          createOnLogin: 'users-without-wallets',
-        },
       }}
     >
       <QueryClientProvider client={queryClient}>
