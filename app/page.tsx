@@ -5,7 +5,7 @@ import { usePrivy, useWallets } from '@privy-io/react-auth';
 
 interface Transaction {
   id: number;
-  type: 'send' | 'buy' | 'balance';
+  type: 'send' | 'buy' | 'balance' | 'chat';
   action: string;
   amount?: string;
   token?: string;
@@ -132,22 +132,28 @@ export default function Home() {
         console.log('✅ Translated:', commandInEnglish);
       }
 
-      // Step 2: Parse the command
-      console.log('🤖 Parsing command...');
+      // Step 2: Parse with Eliza personality
+      console.log('🤖 Lingo parsing command...');
       const parseRes = await fetch('/api/parse-command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           command: commandInEnglish,
+          language: language,
         }),
       });
       const parsed = await parseRes.json();
       console.log('✅ Parsed:', parsed);
 
-      // Step 3: Handle different actions
+      // Step 3: Show Lingo's friendly response
+      if (parsed.response) {
+        console.log('💬 Lingo says:', parsed.response);
+      }
+
+      // Step 4: Handle different actions
       if (parsed.action === 'send') {
         if (!parsed.recipient) {
-          alert('Please provide a phone number or wallet address to send to!');
+          alert(parsed.response || 'Please provide a phone number or wallet address to send to!');
           setIsProcessing(false);
           return;
         }
@@ -171,27 +177,29 @@ export default function Home() {
           console.log('📱 Phone send result:', phoneData);
 
           if (phoneData.hasWallet) {
-            alert(`✅ Recipient Found!\n\n${parsed.recipient} has a Lingo Wallet!\n\nReady to send:\n${parsed.amount} ${parsed.token}\n\nTo: ${phoneData.recipientAddress}\n\n(Real transaction coming next!)`);
+            alert(`✅ ${parsed.response}\n\n${parsed.recipient} has a Lingo Wallet!\n\nReady to send:\n${parsed.amount} ${parsed.token}\n\nTo: ${phoneData.recipientAddress}\n\n(Real transaction coming next!)`);
           } else {
-            alert(`📲 Pending Claim Created!\n\n${parsed.recipient} doesn't have a wallet yet.\n\nWe've created a claim for:\n${parsed.amount} ${parsed.token}\n\nClaim Link:\n${phoneData.claimUrl}\n\n(SMS notification coming next!)`);
+            alert(`📲 ${parsed.response}\n\n${parsed.recipient} doesn't have a wallet yet.\n\nWe've sent them an SMS with a claim link for:\n${parsed.amount} ${parsed.token}\n\nClaim URL: ${phoneData.claimUrl}`);
           }
         } else {
-          alert(`📤 Send Transaction\n\nAmount: ${parsed.amount} ${parsed.token}\nTo: ${parsed.recipient}\nFrom: ${walletAddress}\n\n(Direct wallet transfer!)`);
+          alert(`📤 ${parsed.response}\n\nAmount: ${parsed.amount} ${parsed.token}\nTo: ${parsed.recipient}\n\n(Direct wallet transfer!)`);
         }
       } else if (parsed.action === 'buy') {
-        alert(`💰 Buy Crypto\n\nAmount: ${parsed.amount} ${parsed.token}\nWallet: ${walletAddress}\n\n✨ Powered by AI\n(DEX integration coming next!)`);
+        alert(`💰 ${parsed.response}\n\nAmount: ${parsed.amount} ${parsed.token}\nWallet: ${walletAddress}\n\n🤖 Powered by Lingo AI\n(DEX integration coming soon!)`);
       } else if (parsed.action === 'swap') {
-        alert(`🔄 Swap Tokens\n\nSwap: ${parsed.amount} ${parsed.fromToken}\nFor: ${parsed.toToken}\nWallet: ${walletAddress}\n\n✨ Powered by AI\n(Coming soon!)`);
+        alert(`🔄 ${parsed.response}\n\nSwap: ${parsed.amount} ${parsed.fromToken || 'USDC'}\nFor: ${parsed.toToken || 'ETH'}\n\n🤖 Powered by Lingo AI\n(Coming soon!)`);
       } else if (parsed.action === 'balance') {
-        alert(`💼 Balance Check\n\nWallet: ${walletAddress}\n\nCheck the balance card above! ✨`);
+        alert(`💼 ${parsed.response}`);
+      } else if (parsed.action === 'chat') {
+        alert(`💬 Lingo says:\n\n${parsed.response}`);
       } else {
-        alert(`🤔 I didn't understand that.\n\nTry:\n- "Send 50 USDC to +1-555-1234"\n- "Buy 0.1 ETH"\n- "Swap 100 USDC for ETH"\n- "Check my balance"`);
+        alert(`🤔 ${parsed.response || "I didn't understand that."}\n\nTry:\n- "Send 50 USDC to +1-555-1234"\n- "Buy 0.1 ETH"\n- "Check my balance"\n- Ask me anything!`);
       }
 
       // Add to transaction history
       const newTransaction: Transaction = {
         id: Date.now(),
-        type: parsed.action,
+        type: parsed.action === 'chat' ? 'chat' : parsed.action,
         action: userInput,
         amount: parsed.amount,
         token: parsed.token,
@@ -218,7 +226,8 @@ export default function Home() {
         <div className="text-center">
           <Wallet className="w-24 h-24 text-purple-400 mx-auto mb-6" />
           <h1 className="text-5xl font-bold mb-4">Lingo Wallet</h1>
-          <p className="text-xl opacity-80 mb-8">Your crypto wallet in any language</p>
+          <p className="text-xl opacity-80 mb-2">Your crypto wallet in any language</p>
+          <p className="text-sm opacity-60 mb-8">🤖 Powered by Lingo AI</p>
           <button
             onClick={login}
             className="bg-purple-600 hover:bg-purple-700 px-8 py-4 rounded-xl font-semibold text-lg transition-all transform hover:scale-105"
@@ -240,7 +249,10 @@ export default function Home() {
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
             <Wallet className="w-10 h-10 text-purple-400" />
-            <h1 className="text-3xl font-bold">Lingo Wallet🚀</h1>
+            <div>
+              <h1 className="text-3xl font-bold">Lingo Wallet 🚀</h1>
+              <div className="text-xs opacity-60">🤖 Powered by Lingo AI</div>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <div className="text-sm text-right">
@@ -258,7 +270,7 @@ export default function Home() {
 
         {/* Wallet Address */}
         {walletAddress && (
-          <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-xl p-4 mb-6">
+          <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-xl p-4 mb-6 border border-white border-opacity-20">
             <div className="text-xs opacity-60 mb-1">Your Wallet Address</div>
             <div className="font-mono text-sm break-all">{walletAddress}</div>
           </div>
@@ -267,11 +279,11 @@ export default function Home() {
         {/* Balance Card */}
         <BalanceCard walletAddress={walletAddress} />
 
-        {/* Language Input */}
+        {/* Command Center */}
         <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl p-6 mb-6 border border-white border-opacity-20">
           <div className="flex items-center gap-2 mb-4">
             <Globe className="w-5 h-5 text-purple-400" />
-            <h2 className="font-semibold">Command Center</h2>
+            <h2 className="font-semibold">Talk to Lingo 🤖</h2>
           </div>
 
           <div className="mb-4">
@@ -279,7 +291,7 @@ export default function Home() {
             <select 
               value={language}
               onChange={(e) => setLanguage(e.target.value)}
-              className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-white border-opacity-20 rounded-lg px-4 py-2 text-sm w-full"
+              className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-white border-opacity-30 rounded-lg px-4 py-2 text-sm w-full text-white focus:outline-none focus:ring-2 focus:ring-purple-400"
             >
               {languages.map(lang => (
                 <option key={lang.code} value={lang.code} className="bg-gray-900">
@@ -296,10 +308,10 @@ export default function Home() {
               onChange={(e) => setUserInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && !isProcessing && handleCommand()}
               placeholder={
-                language === 'en' ? 'Try: Send 50 USDC to +1-555-1234' :
-                language === 'hi' ? 'मुझे 0.1 ETH खरीदना है' :
-                language === 'es' ? 'Enviar 50 USDC a +1-555-1234' :
-                'Acheter 0.1 ETH'
+                language === 'en' ? 'Ask me anything or "Send 50 USDC to +1-555-1234"' :
+                language === 'hi' ? 'मुझसे कुछ भी पूछें या "50 USDC भेजें"' :
+                language === 'es' ? 'Pregúntame algo o "Enviar 50 USDC"' :
+                'Demandez-moi quelque chose...'
               }
               disabled={isProcessing}
               className="flex-1 bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-white border-opacity-30 rounded-lg px-4 py-3 text-white placeholder-white placeholder-opacity-60 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-400 focus:bg-opacity-30"
@@ -314,28 +326,29 @@ export default function Home() {
           </div>
 
           <div className="mt-3 text-xs opacity-60">
-            📱 Try: "Send 50 USDC to +1-555-1234" to see phone number magic!
+            💬 Try: "Send crypto" • "What's my balance?" • "How does this work?"
           </div>
         </div>
 
         {/* Transaction History */}
         {transactions.length > 0 && (
-          <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl p-6">
+          <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl p-6 border border-white border-opacity-20">
             <h2 className="font-semibold mb-4 flex items-center gap-2">
               <CheckCircle className="w-5 h-5 text-green-400" />
-              Command History
+              Recent Activity
             </h2>
             <div className="space-y-3">
-              {transactions.map((tx) => (
+              {transactions.slice(0, 5).map((tx) => (
                 <div
                   key={tx.id}
-                  className="bbg-gradient-to-br from-purple-500/20 to-blue-500/20 rounded-lg p-4 border border-white border-opacity-10"
+                  className="bg-white bg-opacity-10 rounded-lg p-4 border border-white border-opacity-20 hover:bg-opacity-15 transition-all"
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-3">
                       <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                         tx.type === 'send' ? 'bg-blue-500 bg-opacity-20' :
                         tx.type === 'buy' ? 'bg-green-500 bg-opacity-20' :
+                        tx.type === 'chat' ? 'bg-purple-500 bg-opacity-20' :
                         'bg-purple-500 bg-opacity-20'
                       }`}>
                         {tx.type === 'send' ? <ArrowUpRight className="w-5 h-5 text-blue-400" /> :
@@ -348,7 +361,7 @@ export default function Home() {
                       </div>
                     </div>
                     <div className="text-xs bg-green-500 bg-opacity-20 text-green-300 px-3 py-1 rounded-full">
-                      Parsed ✓
+                      ✓ Done
                     </div>
                   </div>
                   <div className="text-sm opacity-80 bg-black bg-opacity-20 rounded p-2 mb-2">
@@ -371,11 +384,11 @@ export default function Home() {
         )}
 
         {transactions.length === 0 && (
-          <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 rounded-2xl p-8 text-center border-2 border-dashed border-white border-opacity-20">
+          <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 rounded-2xl p-8 text-center border-2 border-dashed border-purple-400 border-opacity-30">
             <Globe className="w-16 h-16 text-purple-400 mx-auto mb-4 opacity-50" />
-            <div className="text-lg font-semibold mb-2">No commands yet</div>
+            <div className="text-lg font-semibold mb-2">Start chatting with Lingo! 🤖</div>
             <div className="text-sm opacity-60">
-              Type a command above to get started!
+              Send crypto, check balance, or ask me anything in your language!
             </div>
           </div>
         )}
