@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWalletByPhone, createPendingClaim } from '@/lib/phone-wallet';
+import { NextRequest, NextResponse } from 'next/server';
+import { getWalletByPhone, createPendingClaim } from '@/lib/phone-wallet';
+import { sendClaimSMS } from '@/lib/sms';  
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,9 +35,23 @@ export async function POST(request: NextRequest) {
         senderAddress
       );
 
-      const claimUrl = `http://localhost:3000/claim/${claimToken}`;
+      const claimUrl = `https://lingowallet.vercel.app/claim/${claimToken}`;
 
       console.log('✅ Pending claim created:', claimToken);
+
+      // Send SMS notification
+      const smsResult = await sendClaimSMS(
+        phone,
+        amount,
+        token,
+        claimUrl
+      );
+
+      if (smsResult.success) {
+        console.log('✅ SMS notification sent!');
+      } else {
+        console.log('⚠️ SMS failed but claim created:', smsResult.error);
+      }
 
       return NextResponse.json({
         success: true,
