@@ -66,16 +66,9 @@ function BalanceCard({ walletAddress }: { walletAddress?: string }) {
 }
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      type: 'assistant',
-      content: "Hi! 👋 I'm Lingo, your AI crypto assistant.\n\nI can help you:\n• Send crypto to phone numbers 📱\n• Check your balance 💰\n• Answer questions 🤔\n\nTry: \"Send 50 USDC to +1-555-1234\" or ask me anything!",
-      timestamp: new Date(),
-    }
-  ]);
+  const [language, setLanguage] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState('');
-  const [language, setLanguage] = useState('en');
   const [isProcessing, setIsProcessing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -83,13 +76,58 @@ export default function Home() {
   const { wallets } = useWallets();
 
   const languages = [
-    { code: 'en', name: 'English', flag: '🇬🇧' },
-    { code: 'hi', name: 'हिंदी', flag: '🇮🇳' },
-    { code: 'es', name: 'Español', flag: '🇪🇸' },
-    { code: 'fr', name: 'Français', flag: '🇫🇷' },
+    { code: 'en', name: 'English', nativeName: 'English', flag: '🇬🇧' },
+    { code: 'hi', name: 'Hindi', nativeName: 'हिंदी', flag: '🇮🇳' },
+    { code: 'es', name: 'Spanish', nativeName: 'Español', flag: '🇪🇸' },
+    { code: 'fr', name: 'French', nativeName: 'Français', flag: '🇫🇷' },
+    { code: 'pt', name: 'Portuguese', nativeName: 'Português', flag: '🇧🇷' },
+    { code: 'de', name: 'German', nativeName: 'Deutsch', flag: '🇩🇪' },
+    { code: 'ja', name: 'Japanese', nativeName: '日本語', flag: '🇯🇵' },
+    { code: 'zh', name: 'Chinese', nativeName: '中文', flag: '🇨🇳' },
   ];
 
   const walletAddress = wallets[0]?.address;
+
+  // Translate text to selected language
+  const translateToUserLanguage = async (text: string): Promise<string> => {
+    if (!language || language === 'en') return text;
+
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text,
+          targetLang: language,
+        }),
+      });
+      const data = await res.json();
+      return data.translatedText || text;
+    } catch (error) {
+      console.error('Translation error:', error);
+      return text;
+    }
+  };
+
+  // Add welcome message when language is selected
+  const initializeChat = async (selectedLang: string) => {
+    setLanguage(selectedLang);
+    
+    const welcomeText = "Hi! 👋 I'm Lingo, your AI crypto assistant.\n\nI can help you:\n• Send crypto to phone numbers 📱\n• Check your balance 💰\n• Answer questions 🤔\n\nTry: \"Send 50 USDC to +1-555-1234\" or ask me anything!";
+    
+    const translatedWelcome = selectedLang === 'en' 
+      ? welcomeText 
+      : await translateToUserLanguage(welcomeText);
+
+    const welcomeMessage: Message = {
+      id: 1,
+      type: 'assistant',
+      content: translatedWelcome,
+      timestamp: new Date(),
+    };
+    
+    setMessages([welcomeMessage]);
+  };
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -116,10 +154,13 @@ export default function Home() {
 
   const handleSend = async () => {
     if (!authenticated) {
+      const loginText = 'Please login first! Click "Connect Wallet" to get started. 🔐';
+      const translatedLogin = await translateToUserLanguage(loginText);
+      
       const loginMsg: Message = {
         id: Date.now(),
         type: 'assistant',
-        content: 'Please login first! Click "Connect Wallet" to get started. 🔐',
+        content: translatedLogin,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, loginMsg]);
@@ -142,7 +183,7 @@ export default function Home() {
     setIsProcessing(true);
 
     try {
-      // Translate if needed
+      // Translate user input to English for processing
       let commandInEnglish = currentInput;
       if (language !== 'en') {
         const translateRes = await fetch('/api/translate', {
@@ -205,21 +246,27 @@ export default function Home() {
         assistantResponse = parsed.response || "I didn't understand that. Try asking me something!";
       }
 
+      // Translate response back to user's language
+      const translatedResponse = await translateToUserLanguage(assistantResponse);
+
       // Add assistant response
       const assistantMessage: Message = {
         id: Date.now() + 1,
         type: 'assistant',
-        content: assistantResponse,
+        content: translatedResponse,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, assistantMessage]);
 
     } catch (error) {
       console.error('Error:', error);
+      const errorText = 'Oops! Something went wrong. Please try again. 😅';
+      const translatedError = await translateToUserLanguage(errorText);
+      
       const errorMessage: Message = {
         id: Date.now() + 1,
         type: 'assistant',
-        content: 'Oops! Something went wrong. Please try again. 😅',
+        content: translatedError,
         timestamp: new Date(),
       };
       setMessages(prev => [...prev, errorMessage]);
@@ -231,8 +278,8 @@ export default function Home() {
   // Login screen
   if (!authenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white flex items-center justify-center">
-        <div className="text-center">
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white flex items-center justify-center p-4">
+        <div className="text-center max-w-2xl">
           <Wallet className="w-24 h-24 text-purple-400 mx-auto mb-6" />
           <h1 className="text-5xl font-bold mb-4">Lingo Wallet</h1>
           <p className="text-xl opacity-80 mb-2">Your AI-powered crypto wallet</p>
@@ -251,6 +298,45 @@ export default function Home() {
     );
   }
 
+  // Language selection screen
+  if (!language) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white flex items-center justify-center p-4">
+        <div className="max-w-4xl w-full">
+          <div className="text-center mb-8">
+            <Globe className="w-20 h-20 text-purple-400 mx-auto mb-6" />
+            <h1 className="text-4xl font-bold mb-3">Choose Your Language</h1>
+            <p className="text-lg opacity-80">Select your preferred language to continue</p>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {languages.map((lang) => (
+              <button
+                key={lang.code}
+                onClick={() => initializeChat(lang.code)}
+                className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-400/30 hover:border-purple-400/50 rounded-2xl p-6 transition-all transform hover:scale-105"
+              >
+                <div className="text-5xl mb-3">{lang.flag}</div>
+                <div className="text-xl font-bold mb-1">{lang.nativeName}</div>
+                <div className="text-sm opacity-60">{lang.name}</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="text-center mt-8">
+            <button
+              onClick={logout}
+              className="text-sm opacity-60 hover:opacity-100 transition-opacity"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main chat interface
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-4 flex flex-col">
       <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col">
@@ -260,21 +346,19 @@ export default function Home() {
             <Wallet className="w-10 h-10 text-purple-400" />
             <div>
               <h1 className="text-3xl font-bold">Lingo Wallet 🚀</h1>
-              <div className="text-xs opacity-60">🤖 Powered by Lingo AI</div>
+              <div className="text-xs opacity-60">
+                🤖 {languages.find(l => l.code === language)?.nativeName}
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-4">
-            <select 
-              value={language}
-              onChange={(e) => setLanguage(e.target.value)}
-              className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-purple-400/30 rounded-lg px-3 py-2 text-sm"
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setLanguage(null)}
+              className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-400/30 px-4 py-2 rounded-lg text-sm transition-all"
             >
-              {languages.map(lang => (
-                <option key={lang.code} value={lang.code} className="bg-gray-900">
-                  {lang.flag} {lang.name}
-                </option>
-              ))}
-            </select>
+              <Globe className="w-4 h-4 inline mr-2" />
+              Change Language
+            </button>
             <button
               onClick={logout}
               className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 p-2 rounded-lg transition-all"
@@ -298,7 +382,7 @@ export default function Home() {
         {/* Chat Messages - Scrollable */}
         <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl border border-purple-400/20 flex-1 flex flex-col overflow-hidden mb-6">
           <div className="flex items-center gap-2 px-6 py-4 border-b border-purple-400/20">
-            <Globe className="w-5 h-5 text-purple-400" />
+            <Bot className="w-5 h-5 text-purple-400" />
             <h2 className="font-semibold">Chat with Lingo 🤖</h2>
           </div>
 
@@ -363,10 +447,15 @@ export default function Home() {
                 onChange={(e) => setUserInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && !isProcessing && handleSend()}
                 placeholder={
-                  language === 'en' ? 'Ask me anything or give me a command...' :
-                  language === 'hi' ? 'मुझसे कुछ भी पूछें...' :
-                  language === 'es' ? 'Pregúntame algo...' :
-                  'Demandez-moi...'
+                  language === 'en' ? 'Type your message...' :
+                  language === 'hi' ? 'अपना संदेश टाइप करें...' :
+                  language === 'es' ? 'Escribe tu mensaje...' :
+                  language === 'fr' ? 'Tapez votre message...' :
+                  language === 'pt' ? 'Digite sua mensagem...' :
+                  language === 'de' ? 'Nachricht eingeben...' :
+                  language === 'ja' ? 'メッセージを入力...' :
+                  language === 'zh' ? '输入消息...' :
+                  'Type your message...'
                 }
                 disabled={isProcessing}
                 className="flex-1 bg-purple-900/40 border border-purple-400/30 rounded-xl px-4 py-3 text-white placeholder-purple-300 placeholder-opacity-40 focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
