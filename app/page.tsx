@@ -240,7 +240,7 @@ export default function Home() {
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3">
             <Wallet className="w-10 h-10 text-purple-400" />
-            <h1 className="text-3xl font-bold">Lingo Wallet</h1>
+            <h1 className="text-3xl font-bold">Lingo Wallet🚀</h1>
           </div>
           <div className="flex items-center gap-4">
             <div className="text-sm text-right">
