@@ -10,9 +10,86 @@ interface Message {
   timestamp: Date;
 }
 
-function BalanceCard({ walletAddress }: { walletAddress?: string }) {
+interface Translations {
+  totalBalance: string;
+  yourWallet: string;
+  chatWith: string;
+  typeMessage: string;
+  changeLanguage: string;
+  loading: string;
+}
+
+const translations: Record<string, Translations> = {
+  en: {
+    totalBalance: 'Total Balance (Base Chain)',
+    yourWallet: 'Your Wallet Address',
+    chatWith: 'Chat with Lingo 🤖',
+    typeMessage: 'Type your message...',
+    changeLanguage: 'Change Language',
+    loading: 'Loading...',
+  },
+  hi: {
+    totalBalance: 'कुल बैलेंस (बेस चेन)',
+    yourWallet: 'आपका वॉलेट एड्रेस',
+    chatWith: 'Lingo से चैट करें 🤖',
+    typeMessage: 'अपना संदेश टाइप करें...',
+    changeLanguage: 'भाषा बदलें',
+    loading: 'लोड हो रहा है...',
+  },
+  es: {
+    totalBalance: 'Balance Total (Base Chain)',
+    yourWallet: 'Tu Dirección de Billetera',
+    chatWith: 'Chatea con Lingo 🤖',
+    typeMessage: 'Escribe tu mensaje...',
+    changeLanguage: 'Cambiar Idioma',
+    loading: 'Cargando...',
+  },
+  fr: {
+    totalBalance: 'Solde Total (Base Chain)',
+    yourWallet: 'Votre Adresse de Portefeuille',
+    chatWith: 'Discutez avec Lingo 🤖',
+    typeMessage: 'Tapez votre message...',
+    changeLanguage: 'Changer de Langue',
+    loading: 'Chargement...',
+  },
+  pt: {
+    totalBalance: 'Saldo Total (Base Chain)',
+    yourWallet: 'Seu Endereço de Carteira',
+    chatWith: 'Converse com Lingo 🤖',
+    typeMessage: 'Digite sua mensagem...',
+    changeLanguage: 'Mudar Idioma',
+    loading: 'Carregando...',
+  },
+  de: {
+    totalBalance: 'Gesamtguthaben (Base Chain)',
+    yourWallet: 'Ihre Wallet-Adresse',
+    chatWith: 'Chat mit Lingo 🤖',
+    typeMessage: 'Nachricht eingeben...',
+    changeLanguage: 'Sprache ändern',
+    loading: 'Laden...',
+  },
+  ja: {
+    totalBalance: '総残高 (Base Chain)',
+    yourWallet: 'あなたのウォレットアドレス',
+    chatWith: 'Lingoとチャット 🤖',
+    typeMessage: 'メッセージを入力...',
+    changeLanguage: '言語を変更',
+    loading: '読み込み中...',
+  },
+  zh: {
+    totalBalance: '总余额 (Base Chain)',
+    yourWallet: '您的钱包地址',
+    chatWith: '与Lingo聊天 🤖',
+    typeMessage: '输入消息...',
+    changeLanguage: '更改语言',
+    loading: '加载中...',
+  },
+};
+
+function BalanceCard({ walletAddress, language }: { walletAddress?: string; language: string }) {
   const [balances, setBalances] = useState({ ETH: '0.0000', USDC: '0.00' });
   const [loading, setLoading] = useState(true);
+  const t = translations[language] || translations.en;
 
   React.useEffect(() => {
     if (!walletAddress) return;
@@ -43,9 +120,9 @@ function BalanceCard({ walletAddress }: { walletAddress?: string }) {
 
   return (
     <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-2xl p-8 mb-6 shadow-2xl">
-      <div className="text-sm opacity-80 mb-2">Total Balance (Base Chain)</div>
+      <div className="text-sm opacity-80 mb-2">{t.totalBalance}</div>
       {loading ? (
-        <div className="text-3xl font-bold mb-4">Loading...</div>
+        <div className="text-3xl font-bold mb-4">{t.loading}</div>
       ) : (
         <>
           <div className="text-5xl font-bold mb-4">${totalUSD}</div>
@@ -87,6 +164,7 @@ export default function Home() {
   ];
 
   const walletAddress = wallets[0]?.address;
+  const t = language ? (translations[language] || translations.en) : translations.en;
 
   // Translate text to selected language
   const translateToUserLanguage = async (text: string): Promise<string> => {
@@ -115,9 +193,24 @@ export default function Home() {
     
     const welcomeText = "Hi! 👋 I'm Lingo, your AI crypto assistant.\n\nI can help you:\n• Send crypto to phone numbers 📱\n• Check your balance 💰\n• Answer questions 🤔\n\nTry: \"Send 50 USDC to +1-555-1234\" or ask me anything!";
     
-    const translatedWelcome = selectedLang === 'en' 
-      ? welcomeText 
-      : await translateToUserLanguage(welcomeText);
+    // Translate welcome message
+    let translatedWelcome = welcomeText;
+    if (selectedLang !== 'en') {
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: welcomeText,
+            targetLang: selectedLang,
+          }),
+        });
+        const data = await res.json();
+        translatedWelcome = data.translatedText || welcomeText;
+      } catch (error) {
+        console.error('Translation error:', error);
+      }
+    }
 
     const welcomeMessage: Message = {
       id: 1,
@@ -357,7 +450,7 @@ export default function Home() {
               className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 hover:from-purple-500/30 hover:to-blue-500/30 border border-purple-400/30 px-4 py-2 rounded-lg text-sm transition-all"
             >
               <Globe className="w-4 h-4 inline mr-2" />
-              Change Language
+              {t.changeLanguage}
             </button>
             <button
               onClick={logout}
@@ -371,19 +464,19 @@ export default function Home() {
         {/* Wallet Address */}
         {walletAddress && (
           <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-xl p-4 mb-6 border border-purple-400/20">
-            <div className="text-xs opacity-60 mb-1">Your Wallet Address</div>
+            <div className="text-xs opacity-60 mb-1">{t.yourWallet}</div>
             <div className="font-mono text-sm break-all">{walletAddress}</div>
           </div>
         )}
 
         {/* Balance Card */}
-        <BalanceCard walletAddress={walletAddress} />
+        <BalanceCard walletAddress={walletAddress} language={language} />
 
         {/* Chat Messages - Scrollable */}
         <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl border border-purple-400/20 flex-1 flex flex-col overflow-hidden mb-6">
           <div className="flex items-center gap-2 px-6 py-4 border-b border-purple-400/20">
             <Bot className="w-5 h-5 text-purple-400" />
-            <h2 className="font-semibold">Chat with Lingo 🤖</h2>
+            <h2 className="font-semibold">{t.chatWith}</h2>
           </div>
 
           {/* Messages Area - Scrollable */}
@@ -446,17 +539,7 @@ export default function Home() {
                 value={userInput}
                 onChange={(e) => setUserInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && !isProcessing && handleSend()}
-                placeholder={
-                  language === 'en' ? 'Type your message...' :
-                  language === 'hi' ? 'अपना संदेश टाइप करें...' :
-                  language === 'es' ? 'Escribe tu mensaje...' :
-                  language === 'fr' ? 'Tapez votre message...' :
-                  language === 'pt' ? 'Digite sua mensagem...' :
-                  language === 'de' ? 'Nachricht eingeben...' :
-                  language === 'ja' ? 'メッセージを入力...' :
-                  language === 'zh' ? '输入消息...' :
-                  'Type your message...'
-                }
+                placeholder={t.typeMessage}
                 disabled={isProcessing}
                 className="flex-1 bg-purple-900/40 border border-purple-400/30 rounded-xl px-4 py-3 text-white placeholder-purple-300 placeholder-opacity-40 focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
               />
