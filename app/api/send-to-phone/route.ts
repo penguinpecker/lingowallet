@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getWalletByPhone, createPendingClaim } from '@/lib/phone-wallet';
-import { NextRequest, NextResponse } from 'next/server';
-import { getWalletByPhone, createPendingClaim } from '@/lib/phone-wallet';
-import { sendClaimSMS } from '@/lib/sms';  
+import { sendClaimSMS } from '@/lib/sms';
 
 export async function POST(request: NextRequest) {
   try {
