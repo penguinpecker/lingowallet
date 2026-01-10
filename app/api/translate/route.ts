@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error('Translation error:', error);
+    const { text } = await request.json();  // 
     return NextResponse.json({ 
       translatedText: text,
       error: error.message 
