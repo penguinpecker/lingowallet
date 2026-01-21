@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Wallet, Globe, Send, LogOut, Bot, User } from 'lucide-react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
+import TransactionHistory from '@/components/TransactionHistory';
 
 interface Message {
   id: number;
@@ -147,6 +148,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [refreshHistory, setRefreshHistory] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const { login, logout, authenticated, user } = usePrivy();
@@ -165,6 +167,44 @@ export default function Home() {
 
   const walletAddress = wallets[0]?.address;
   const t = language ? (translations[language] || translations.en) : translations.en;
+
+  // Record transaction to Supabase
+  const recordTransaction = async (params: {
+    type: 'send' | 'swap' | 'receive' | 'claim';
+    amount: string;
+    token: string;
+    recipientAddress?: string;
+    recipientPhone?: string;
+    originalCommand: string;
+  }) => {
+    try {
+      const response = await fetch('/api/transactions/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: params.type,
+          walletAddress: walletAddress?.toLowerCase(),
+          recipientAddress: params.recipientAddress,
+          recipientPhone: params.recipientPhone,
+          amount: params.amount,
+          token: params.token,
+          chain: 'base',
+          originalCommand: params.originalCommand,
+          language: language,
+        }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        console.log('✅ Transaction recorded:', data.transaction?.id);
+        // Trigger refresh of transaction history
+        setRefreshHistory(prev => prev + 1);
+      }
+      return data;
+    } catch (error) {
+      console.error('Failed to record transaction:', error);
+      return null;
+    }
+  };
 
   // Translate text to selected language
   const translateToUserLanguage = async (text: string): Promise<string> => {
@@ -309,6 +349,7 @@ export default function Home() {
         if (!parsed.recipient) {
           assistantResponse = parsed.response || 'Please provide a phone number or wallet address!';
         } else if (parsed.recipient.includes('+')) {
+          // Phone number send
           const phoneRes = await fetch('/api/send-to-phone', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -321,12 +362,31 @@ export default function Home() {
           });
           const phoneData = await phoneRes.json();
 
+          // Record the transaction
+          await recordTransaction({
+            type: 'send',
+            amount: parsed.amount,
+            token: parsed.token,
+            recipientPhone: parsed.recipient,
+            recipientAddress: phoneData.recipientAddress,
+            originalCommand: currentInput,
+          });
+
           if (phoneData.hasWallet) {
             assistantResponse = `${parsed.response}\n\n✅ ${parsed.recipient} has a Lingo Wallet!\n\n📤 Ready to send:\n• ${parsed.amount} ${parsed.token}\n• To: ${phoneData.recipientAddress}\n\n💡 Real transaction coming soon!`;
           } else {
             assistantResponse = `${parsed.response}\n\n📲 They don't have a wallet yet, but I've sent them an SMS!\n\n✅ Claim created:\n• ${parsed.amount} ${parsed.token}\n• Link: ${phoneData.claimUrl}\n\nThey'll get a text to claim it! 🎉`;
           }
         } else {
+          // Direct wallet address send
+          await recordTransaction({
+            type: 'send',
+            amount: parsed.amount,
+            token: parsed.token,
+            recipientAddress: parsed.recipient,
+            originalCommand: currentInput,
+          });
+
           assistantResponse = `${parsed.response}\n\n📤 Direct transfer:\n• ${parsed.amount} ${parsed.token}\n• To: ${parsed.recipient}`;
         }
       } else if (parsed.action === 'buy') {
@@ -431,8 +491,8 @@ export default function Home() {
 
   // Main chat interface
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-4 flex flex-col">
-      <div className="max-w-4xl mx-auto w-full flex-1 flex flex-col">
+    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white p-4">
+      <div className="max-w-4xl mx-auto w-full">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -472,8 +532,8 @@ export default function Home() {
         {/* Balance Card */}
         <BalanceCard walletAddress={walletAddress} language={language} />
 
-        {/* Chat Messages - Scrollable */}
-        <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl border border-purple-400/20 flex-1 flex flex-col overflow-hidden mb-6">
+        {/* Chat Messages */}
+        <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl border border-purple-400/20 flex flex-col overflow-hidden mb-6" style={{ height: '400px' }}>
           <div className="flex items-center gap-2 px-6 py-4 border-b border-purple-400/20">
             <Bot className="w-5 h-5 text-purple-400" />
             <h2 className="font-semibold">{t.chatWith}</h2>
@@ -553,6 +613,15 @@ export default function Home() {
             </div>
           </div>
         </div>
+
+        {/* Transaction History */}
+        {walletAddress && (
+          <TransactionHistory 
+            walletAddress={walletAddress} 
+            language={language}
+            key={refreshHistory}
+          />
+        )}
       </div>
     </div>
   );
