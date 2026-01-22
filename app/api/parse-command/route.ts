@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { lingoWalletCharacter } from '@/lib/eliza-character';
 
 export async function POST(request: NextRequest) {
   try {
     const { command, language } = await request.json();
     const parsed = parseCommandWithElizaPersonality(command, language);
     return NextResponse.json(parsed);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Parse error:', error);
     return NextResponse.json({ 
       action: 'chat',
@@ -26,7 +25,7 @@ function parseCommandWithElizaPersonality(command: string, language?: string) {
       response: `Hello! 👋 I'm Lingo, your friendly crypto wallet assistant!
 
 I can help you:
-- Send crypto to phone numbers (even without a wallet!)
+- Send crypto to phone numbers or wallet addresses
 - Check your balance
 - Answer questions about crypto
 
@@ -92,6 +91,9 @@ Try it now with a friend's number!`,
 ✅ **Send Crypto to Phone Numbers**
    "Send 50 USDC to +1-555-1234"
 
+✅ **Send to Wallet Addresses**
+   "Send 0.01 ETH to 0x..."
+
 ✅ **Check Your Balance**
    "What's my balance?" or "Check balance"
 
@@ -112,15 +114,35 @@ What would you like to try first? 😊`,
     }
   }
   
-  // SEND command
+  // SEND command - check this BEFORE other patterns
   if (lower.includes('send') || lower.includes('transfer') || lower.includes('भेज') || 
       lower.includes('enviar') || lower.includes('envoyer')) {
-    const amountMatch = command.match(/(\d+\.?\d*)\s*(usdc|eth|matic|btc|usd)/i);
-    const phoneMatch = command.match(/\+[\d\s\-()]+/);
     
-    const amount = amountMatch ? amountMatch[1] : null;
-    const token = amountMatch ? amountMatch[2].toUpperCase() : 'USDC';
-    const recipient = phoneMatch ? phoneMatch[0].trim() : null;
+    // Match amount and token - flexible regex that handles spaces
+    // Matches: "0.0001 eth", "0.0001eth", "50 usdc", etc.
+    const amountMatch = command.match(/(\d+\.?\d*)\s*(usdc|eth|matic|btc|usd)/i);
+    
+    // Also try matching amount alone if token comes later
+    const amountOnlyMatch = command.match(/(\d+\.?\d*)/);
+    
+    // Detect token from command
+    const tokenMatch = lower.match(/\b(usdc|eth|matic|btc)\b/);
+    
+    // Match phone number OR wallet address
+    const phoneMatch = command.match(/\+[\d\s\-()]+/);
+    const walletMatch = command.match(/0x[a-fA-F0-9]{40}/);
+    
+    // Get amount - prefer full match, fallback to amount only
+    const amount = amountMatch ? amountMatch[1] : (amountOnlyMatch ? amountOnlyMatch[1] : null);
+    
+    // Get token - prefer from amount match, then from separate token match, default to ETH
+    const token = amountMatch ? amountMatch[2].toUpperCase() : 
+                  (tokenMatch ? tokenMatch[1].toUpperCase() : 'ETH');
+    
+    // Prefer wallet address if found, otherwise phone
+    const recipient = walletMatch ? walletMatch[0] : (phoneMatch ? phoneMatch[0].trim() : null);
+    
+    console.log('Parse result:', { amount, token, recipient, command });
     
     return {
       action: 'send',
@@ -128,9 +150,22 @@ What would you like to try first? 😊`,
       token,
       recipient,
       response: recipient 
-        ? `I'll help you send ${amount} ${token} to ${recipient}! 📱 Let me check if they have a wallet...`
+        ? `I'll help you send ${amount} ${token} to ${recipient.startsWith('0x') ? recipient.slice(0, 10) + '...' : recipient}! 🚀`
         : `I'd love to help you send ${amount || 'some'} ${token}! Just tell me the phone number or wallet address. 😊`,
-      confidence: recipient ? 0.9 : 0.6,
+      confidence: recipient && amount ? 0.9 : 0.6,
+    };
+  }
+
+  // Handle standalone wallet address (user might send address after being asked)
+  const standaloneWallet = command.match(/^(0x[a-fA-F0-9]{40})$/);
+  if (standaloneWallet) {
+    return {
+      action: 'send',
+      amount: null,
+      token: 'ETH',
+      recipient: standaloneWallet[1],
+      response: `Got the address! How much would you like to send to ${standaloneWallet[1].slice(0, 10)}...? 💸`,
+      confidence: 0.7,
     };
   }
   
@@ -184,7 +219,7 @@ Need anything else?`,
 I was created to make crypto accessible to everyone, in every language. 🌍
 
 My superpowers:
-✨ Send crypto using phone numbers
+✨ Send crypto using phone numbers or wallet addresses
 ✨ Understand multiple languages
 ✨ Help beginners get started with crypto
 ✨ Make crypto as easy as texting!
@@ -201,6 +236,7 @@ Ask me anything or try sending some crypto! 💰`,
 
 💸 **Send crypto:**
    "Send 50 USDC to +1-555-1234"
+   "Send 0.01 ETH to 0x..."
 
 💰 **Check balance:**
    "What's my balance?"

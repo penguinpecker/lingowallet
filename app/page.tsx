@@ -1,14 +1,41 @@
 'use client';
-import React, { useState, useRef, useEffect } from 'react';
-import { Wallet, Globe, Send, LogOut, Bot, User } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Wallet, Globe, Send, LogOut, Bot, User, ExternalLink, Loader2 } from 'lucide-react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
+import { parseEther, parseUnits, encodeFunctionData, createWalletClient, custom } from 'viem';
+import { base } from 'viem/chains';
 import TransactionHistory from '@/components/TransactionHistory';
+
+// USDC on Base
+const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
+const USDC_ABI = [
+  {
+    name: 'transfer',
+    type: 'function',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bool' }],
+  },
+] as const;
 
 interface Message {
   id: number;
   type: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  txHash?: string;
+  explorerUrl?: string;
+}
+
+interface PendingTx {
+  amount: string;
+  token: string;
+  recipient: string;
+  recipientAddress?: string;
+  recipientPhone?: string;
+  originalCommand: string;
 }
 
 interface Translations {
@@ -87,12 +114,12 @@ const translations: Record<string, Translations> = {
   },
 };
 
-function BalanceCard({ walletAddress, language }: { walletAddress?: string; language: string }) {
+function BalanceCard({ walletAddress, language, refreshKey }: { walletAddress?: string; language: string; refreshKey?: number }) {
   const [balances, setBalances] = useState({ ETH: '0.0000', USDC: '0.00' });
   const [loading, setLoading] = useState(true);
   const t = translations[language] || translations.en;
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!walletAddress) return;
 
     const fetchBalances = async () => {
@@ -115,7 +142,7 @@ function BalanceCard({ walletAddress, language }: { walletAddress?: string; lang
     };
 
     fetchBalances();
-  }, [walletAddress]);
+  }, [walletAddress, refreshKey]);
 
   const totalUSD = (parseFloat(balances.ETH) * 3400 + parseFloat(balances.USDC)).toFixed(2);
 
@@ -143,12 +170,25 @@ function BalanceCard({ walletAddress, language }: { walletAddress?: string; lang
   );
 }
 
+// Validate Ethereum address
+function isValidAddress(address: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(address);
+}
+
+// Get explorer URL
+function getExplorerUrl(txHash: string) {
+  return `https://basescan.org/tx/${txHash}`;
+}
+
 export default function Home() {
   const [language, setLanguage] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [userInput, setUserInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [refreshHistory, setRefreshHistory] = useState(0);
+  const [refreshBalance, setRefreshBalance] = useState(0);
+  const [pendingTx, setPendingTx] = useState<PendingTx | null>(null);
+  const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   const { login, logout, authenticated, user } = usePrivy();
@@ -166,7 +206,92 @@ export default function Home() {
   ];
 
   const walletAddress = wallets[0]?.address;
+  const embeddedWallet = wallets.find(w => w.walletClientType === 'privy');
   const t = language ? (translations[language] || translations.en) : translations.en;
+
+  // Execute transaction using embedded wallet
+  const executeTransaction = useCallback(async (tx: PendingTx) => {
+    if (!embeddedWallet || !tx.recipientAddress) {
+      return { success: false, error: 'Wallet not ready' };
+    }
+
+    // Validate amount
+    if (!tx.amount || isNaN(parseFloat(tx.amount))) {
+      return { success: false, error: 'Invalid amount' };
+    }
+
+    try {
+      // Get the provider from embedded wallet
+      const provider = await embeddedWallet.getEthereumProvider();
+      
+      // Switch to Base chain
+      try {
+        await provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x2105' }], // Base chain ID
+        });
+      } catch (switchError: any) {
+        // If chain doesn't exist, add it
+        if (switchError.code === 4902) {
+          await provider.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: '0x2105',
+              chainName: 'Base',
+              nativeCurrency: { name: 'Ethereum', symbol: 'ETH', decimals: 18 },
+              rpcUrls: ['https://mainnet.base.org'],
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
+          });
+        }
+      }
+
+      // Create wallet client
+      const walletClient = createWalletClient({
+        chain: base,
+        transport: custom(provider),
+      });
+
+      let txHash: string;
+
+      if (tx.token.toUpperCase() === 'ETH') {
+        // Send ETH
+        txHash = await walletClient.sendTransaction({
+          account: walletAddress as `0x${string}`,
+          to: tx.recipientAddress as `0x${string}`,
+          value: parseEther(tx.amount),
+        });
+      } else if (tx.token.toUpperCase() === 'USDC') {
+        // Send USDC
+        const data = encodeFunctionData({
+          abi: USDC_ABI,
+          functionName: 'transfer',
+          args: [tx.recipientAddress as `0x${string}`, parseUnits(tx.amount, 6)],
+        });
+
+        txHash = await walletClient.sendTransaction({
+          account: walletAddress as `0x${string}`,
+          to: USDC_ADDRESS,
+          data,
+        });
+      } else {
+        throw new Error(`Unsupported token: ${tx.token}`);
+      }
+
+      return {
+        success: true,
+        txHash,
+        explorerUrl: getExplorerUrl(txHash),
+      };
+    } catch (error: unknown) {
+      console.error('Transaction failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return {
+        success: false,
+        error: errorMessage,
+      };
+    }
+  }, [embeddedWallet, walletAddress]);
 
   // Record transaction to Supabase
   const recordTransaction = async (params: {
@@ -176,6 +301,8 @@ export default function Home() {
     recipientAddress?: string;
     recipientPhone?: string;
     originalCommand: string;
+    txHash?: string;
+    status?: 'pending' | 'confirmed' | 'failed';
   }) => {
     try {
       const response = await fetch('/api/transactions/record', {
@@ -191,12 +318,13 @@ export default function Home() {
           chain: 'base',
           originalCommand: params.originalCommand,
           language: language,
+          txHash: params.txHash,
+          status: params.status || 'pending',
         }),
       });
       const data = await response.json();
       if (data.success) {
         console.log('✅ Transaction recorded:', data.transaction?.id);
-        // Trigger refresh of transaction history
         setRefreshHistory(prev => prev + 1);
       }
       return data;
@@ -227,13 +355,94 @@ export default function Home() {
     }
   };
 
+  // Handle confirm send
+  const handleConfirmSend = async () => {
+    if (!pendingTx) return;
+    
+    setIsSending(true);
+    
+    try {
+      const result = await executeTransaction(pendingTx);
+      
+      if (result?.success && result.txHash) {
+        // Record successful transaction
+        await recordTransaction({
+          type: 'send',
+          amount: pendingTx.amount,
+          token: pendingTx.token,
+          recipientAddress: pendingTx.recipientAddress,
+          recipientPhone: pendingTx.recipientPhone,
+          originalCommand: pendingTx.originalCommand,
+          txHash: result.txHash,
+          status: 'confirmed',
+        });
+
+        const successText = `✅ Transaction sent!\n\n💸 ${pendingTx.amount} ${pendingTx.token} sent to ${pendingTx.recipientPhone || pendingTx.recipientAddress?.slice(0, 10) + '...'}\n\n🔗 View on BaseScan`;
+        const translatedSuccess = await translateToUserLanguage(successText);
+
+        const successMessage: Message = {
+          id: Date.now(),
+          type: 'assistant',
+          content: translatedSuccess,
+          timestamp: new Date(),
+          txHash: result.txHash,
+          explorerUrl: result.explorerUrl,
+        };
+        setMessages(prev => [...prev, successMessage]);
+        
+        // Refresh balance after tx
+        setTimeout(() => setRefreshBalance(prev => prev + 1), 2000);
+      } else {
+        const errorText = `❌ Transaction failed: ${result?.error || 'Unknown error'}\n\nPlease try again or check your balance.`;
+        const translatedError = await translateToUserLanguage(errorText);
+
+        const errorMessage: Message = {
+          id: Date.now(),
+          type: 'assistant',
+          content: translatedError,
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      }
+    } catch (error) {
+      console.error('Send error:', error);
+      const errorText = 'Oops! Something went wrong. Please try again. 😅';
+      const translatedError = await translateToUserLanguage(errorText);
+      
+      const errorMessage: Message = {
+        id: Date.now(),
+        type: 'assistant',
+        content: translatedError,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsSending(false);
+      setPendingTx(null);
+    }
+  };
+
+  // Handle cancel send
+  const handleCancelSend = async () => {
+    setPendingTx(null);
+    const cancelText = '❌ Transaction cancelled.';
+    const translatedCancel = await translateToUserLanguage(cancelText);
+    
+    const cancelMessage: Message = {
+      id: Date.now(),
+      type: 'assistant',
+      content: translatedCancel,
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, cancelMessage]);
+  };
+
   // Add welcome message when language is selected
   const initializeChat = async (selectedLang: string) => {
     setLanguage(selectedLang);
     
-    const welcomeText = "Hi! 👋 I'm Lingo, your AI crypto assistant.\n\nI can help you:\n• Send crypto to phone numbers 📱\n• Check your balance 💰\n• Answer questions 🤔\n\nTry: \"Send 50 USDC to +1-555-1234\" or ask me anything!";
+    const welcomeText = "Hi! 👋 I'm Lingo, your AI crypto assistant.\n\nI can help you:\n• Send crypto to phone numbers 📱\n• Check your balance 💰\n• Answer questions 🤔\n\nTry: \"Send 0.001 ETH to 0x...\" or ask me anything!";
     
-    // Translate welcome message
     let translatedWelcome = welcomeText;
     if (selectedLang !== 'en') {
       try {
@@ -269,10 +478,10 @@ export default function Home() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, pendingTx]);
 
   // Auto-link phone
-  React.useEffect(() => {
+  useEffect(() => {
     if (authenticated && user?.phone?.number && walletAddress) {
       fetch('/api/link-phone', {
         method: 'POST',
@@ -362,35 +571,52 @@ export default function Home() {
           });
           const phoneData = await phoneRes.json();
 
-          // Record the transaction
-          await recordTransaction({
-            type: 'send',
-            amount: parsed.amount,
-            token: parsed.token,
-            recipientPhone: parsed.recipient,
-            recipientAddress: phoneData.recipientAddress,
-            originalCommand: currentInput,
-          });
+          if (phoneData.hasWallet && phoneData.recipientAddress) {
+            if (!parsed.amount) {
+              assistantResponse = `How much ${parsed.token || 'USDC'} would you like to send to ${parsed.recipient}?`;
+            } else {
+              setPendingTx({
+                amount: parsed.amount,
+                token: parsed.token || 'USDC',
+                recipient: parsed.recipient,
+                recipientAddress: phoneData.recipientAddress,
+                recipientPhone: parsed.recipient,
+                originalCommand: currentInput,
+              });
 
-          if (phoneData.hasWallet) {
-            assistantResponse = `${parsed.response}\n\n✅ ${parsed.recipient} has a Lingo Wallet!\n\n📤 Ready to send:\n• ${parsed.amount} ${parsed.token}\n• To: ${phoneData.recipientAddress}\n\n💡 Real transaction coming soon!`;
+              assistantResponse = `📤 Ready to send:\n\n• Amount: ${parsed.amount} ${parsed.token}\n• To: ${parsed.recipient}\n• Wallet: ${phoneData.recipientAddress.slice(0, 10)}...${phoneData.recipientAddress.slice(-8)}\n\n⚠️ Please confirm to execute on Base chain.`;
+            }
           } else {
-            assistantResponse = `${parsed.response}\n\n📲 They don't have a wallet yet, but I've sent them an SMS!\n\n✅ Claim created:\n• ${parsed.amount} ${parsed.token}\n• Link: ${phoneData.claimUrl}\n\nThey'll get a text to claim it! 🎉`;
+            await recordTransaction({
+              type: 'send',
+              amount: parsed.amount || '0',
+              token: parsed.token || 'USDC',
+              recipientPhone: parsed.recipient,
+              originalCommand: currentInput,
+              status: 'pending',
+            });
+
+            assistantResponse = `📲 They don't have a wallet yet!\n\n✅ Claim link created:\n• ${parsed.amount} ${parsed.token}\n• Link: ${phoneData.claimUrl}\n\nThey'll get a text to claim it! 🎉`;
+          }
+        } else if (isValidAddress(parsed.recipient)) {
+          if (!parsed.amount) {
+            assistantResponse = `How much ${parsed.token || 'ETH'} would you like to send to ${parsed.recipient.slice(0, 10)}...?`;
+          } else {
+            setPendingTx({
+              amount: parsed.amount,
+              token: parsed.token || 'ETH',
+              recipient: parsed.recipient,
+              recipientAddress: parsed.recipient,
+              originalCommand: currentInput,
+            });
+
+            assistantResponse = `📤 Ready to send:\n\n• Amount: ${parsed.amount} ${parsed.token}\n• To: ${parsed.recipient.slice(0, 10)}...${parsed.recipient.slice(-8)}\n\n⚠️ Please confirm to execute on Base chain.`;
           }
         } else {
-          // Direct wallet address send
-          await recordTransaction({
-            type: 'send',
-            amount: parsed.amount,
-            token: parsed.token,
-            recipientAddress: parsed.recipient,
-            originalCommand: currentInput,
-          });
-
-          assistantResponse = `${parsed.response}\n\n📤 Direct transfer:\n• ${parsed.amount} ${parsed.token}\n• To: ${parsed.recipient}`;
+          assistantResponse = `❌ Invalid address format. Please provide a valid wallet address (0x...) or phone number (+1...).`;
         }
       } else if (parsed.action === 'buy') {
-        assistantResponse = `${parsed.response}\n\n💰 Purchase:\n• ${parsed.amount} ${parsed.token}\n\n🔜 DEX integration coming!`;
+        assistantResponse = `${parsed.response}\n\n💰 Purchase:\n• ${parsed.amount} ${parsed.token}\n\n🔜 DEX integration coming soon!`;
       } else if (parsed.action === 'balance') {
         assistantResponse = `${parsed.response}`;
       } else if (parsed.action === 'chat') {
@@ -530,7 +756,7 @@ export default function Home() {
         )}
 
         {/* Balance Card */}
-        <BalanceCard walletAddress={walletAddress} language={language} />
+        <BalanceCard walletAddress={walletAddress} language={language} refreshKey={refreshBalance} />
 
         {/* Chat Messages */}
         <div className="bg-gradient-to-br from-purple-500/20 to-blue-500/20 backdrop-blur-lg rounded-2xl border border-purple-400/20 flex flex-col overflow-hidden mb-6" style={{ height: '400px' }}>
@@ -539,7 +765,7 @@ export default function Home() {
             <h2 className="font-semibold">{t.chatWith}</h2>
           </div>
 
-          {/* Messages Area - Scrollable */}
+          {/* Messages Area */}
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
             {messages.map((msg) => (
               <div
@@ -560,6 +786,17 @@ export default function Home() {
                   }`}
                 >
                   <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+                  {msg.explorerUrl && (
+                    <a
+                      href={msg.explorerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 mt-2 text-xs text-purple-300 hover:text-purple-200 transition-colors"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      View on BaseScan
+                    </a>
+                  )}
                   <div className="text-xs opacity-50 mt-1">
                     {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </div>
@@ -572,6 +809,41 @@ export default function Home() {
                 )}
               </div>
             ))}
+            
+            {/* Pending Transaction Confirmation */}
+            {pendingTx && (
+              <div className="flex gap-3 justify-start">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center flex-shrink-0 mt-1">
+                  <Bot className="w-5 h-5" />
+                </div>
+                <div className="bg-purple-900/40 border border-yellow-400/40 rounded-2xl px-4 py-3">
+                  <div className="text-sm mb-3">⚠️ Confirm Transaction</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleConfirmSend}
+                      disabled={isSending}
+                      className="bg-green-600 hover:bg-green-700 disabled:bg-green-800 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+                    >
+                      {isSending ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        '✅ Confirm'
+                      )}
+                    </button>
+                    <button
+                      onClick={handleCancelSend}
+                      disabled={isSending}
+                      className="bg-red-600/50 hover:bg-red-600 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                    >
+                      ❌ Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
             
             {isProcessing && (
               <div className="flex gap-3 justify-start">
@@ -598,14 +870,14 @@ export default function Home() {
                 type="text"
                 value={userInput}
                 onChange={(e) => setUserInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && !isProcessing && handleSend()}
+                onKeyPress={(e) => e.key === 'Enter' && !isProcessing && !pendingTx && handleSend()}
                 placeholder={t.typeMessage}
-                disabled={isProcessing}
+                disabled={isProcessing || !!pendingTx}
                 className="flex-1 bg-purple-900/40 border border-purple-400/30 rounded-xl px-4 py-3 text-white placeholder-purple-300 placeholder-opacity-40 focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
               />
               <button
                 onClick={handleSend}
-                disabled={isProcessing || !userInput.trim()}
+                disabled={isProcessing || !userInput.trim() || !!pendingTx}
                 className="bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 disabled:opacity-50 px-6 py-3 rounded-xl transition-all"
               >
                 <Send className="w-5 h-5" />
