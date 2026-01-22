@@ -4,16 +4,12 @@ import { PrivyProvider } from '@privy-io/react-auth';
 import { WagmiProvider, createConfig } from '@privy-io/wagmi';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http } from 'viem';
-import { base, arbitrum, optimism, mainnet, polygon } from 'viem/chains';
+import { base } from 'viem/chains';
 
 const wagmiConfig = createConfig({
-  chains: [base, mainnet, arbitrum, optimism, polygon],
+  chains: [base],
   transports: {
     [base.id]: http(),
-    [mainnet.id]: http(),
-    [arbitrum.id]: http(),
-    [optimism.id]: http(),
-    [polygon.id]: http(),
   },
 });
 
@@ -30,9 +26,8 @@ export default function Providers({ children }: { children: React.ReactNode }) {
         },
         embeddedWallets: {
           createOnLogin: 'users-without-wallets',
+          requireUserPasswordOnCreate: false,
         },
-        defaultChain: base,
-        supportedChains: [base, mainnet, arbitrum, optimism, polygon],
       }}
     >
       <QueryClientProvider client={queryClient}>

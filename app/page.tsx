@@ -20,6 +20,19 @@ const USDC_ABI = [
   },
 ] as const;
 
+// ERC20 Approve ABI
+const ERC20_APPROVE_ABI = [
+  {
+    name: 'approve',
+    type: 'function',
+    inputs: [
+      { name: 'spender', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bool' }],
+  },
+] as const;
+
 interface Message {
   id: number;
   type: 'user' | 'assistant';
@@ -30,12 +43,28 @@ interface Message {
 }
 
 interface PendingTx {
+  txType: 'send' | 'swap';
   amount: string;
   token: string;
-  recipient: string;
+  recipient?: string;
   recipientAddress?: string;
   recipientPhone?: string;
   originalCommand: string;
+  // Swap specific fields
+  toToken?: string;
+  toAmount?: string;
+  swapData?: {
+    needsApproval: boolean;
+    approvalAddress: string | null;
+    tokenAddress: string;
+    parsedAmount: string;
+    transactionRequest: {
+      to: string;
+      data: string;
+      value: string;
+      gasLimit: string;
+    };
+  };
 }
 
 interface Translations {
@@ -209,29 +238,25 @@ export default function Home() {
   const embeddedWallet = wallets.find(w => w.walletClientType === 'privy');
   const t = language ? (translations[language] || translations.en) : translations.en;
 
-  // Execute transaction using embedded wallet
-  const executeTransaction = useCallback(async (tx: PendingTx) => {
+  // Execute send transaction using embedded wallet
+  const executeSendTransaction = useCallback(async (tx: PendingTx) => {
     if (!embeddedWallet || !tx.recipientAddress) {
       return { success: false, error: 'Wallet not ready' };
     }
 
-    // Validate amount
     if (!tx.amount || isNaN(parseFloat(tx.amount))) {
       return { success: false, error: 'Invalid amount' };
     }
 
     try {
-      // Get the provider from embedded wallet
       const provider = await embeddedWallet.getEthereumProvider();
       
-      // Switch to Base chain
       try {
         await provider.request({
           method: 'wallet_switchEthereumChain',
-          params: [{ chainId: '0x2105' }], // Base chain ID
+          params: [{ chainId: '0x2105' }],
         });
       } catch (switchError: any) {
-        // If chain doesn't exist, add it
         if (switchError.code === 4902) {
           await provider.request({
             method: 'wallet_addEthereumChain',
@@ -246,7 +271,6 @@ export default function Home() {
         }
       }
 
-      // Create wallet client
       const walletClient = createWalletClient({
         chain: base,
         transport: custom(provider),
@@ -255,14 +279,12 @@ export default function Home() {
       let txHash: string;
 
       if (tx.token.toUpperCase() === 'ETH') {
-        // Send ETH
         txHash = await walletClient.sendTransaction({
           account: walletAddress as `0x${string}`,
           to: tx.recipientAddress as `0x${string}`,
           value: parseEther(tx.amount),
         });
       } else if (tx.token.toUpperCase() === 'USDC') {
-        // Send USDC
         const data = encodeFunctionData({
           abi: USDC_ABI,
           functionName: 'transfer',
@@ -286,10 +308,91 @@ export default function Home() {
     } catch (error: unknown) {
       console.error('Transaction failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: errorMessage };
+    }
+  }, [embeddedWallet, walletAddress]);
+
+  // Execute swap transaction
+  const executeSwapTransaction = useCallback(async (tx: PendingTx) => {
+    if (!embeddedWallet || !tx.swapData) {
+      return { success: false, error: 'Wallet not ready or swap data missing' };
+    }
+
+    try {
+      const provider = await embeddedWallet.getEthereumProvider();
+      
+      // Switch to Base chain
+      try {
+        await provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x2105' }],
+        });
+      } catch (switchError: any) {
+        if (switchError.code === 4902) {
+          await provider.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: '0x2105',
+              chainName: 'Base',
+              nativeCurrency: { name: 'Ethereum', symbol: 'ETH', decimals: 18 },
+              rpcUrls: ['https://mainnet.base.org'],
+              blockExplorerUrls: ['https://basescan.org'],
+            }],
+          });
+        }
+      }
+
+      const walletClient = createWalletClient({
+        chain: base,
+        transport: custom(provider),
+      });
+
+      // Step 1: Approve token if needed (for non-ETH swaps)
+      if (tx.swapData.needsApproval && tx.swapData.approvalAddress && tx.token.toUpperCase() !== 'ETH') {
+        console.log('📝 Approving token spend...');
+        
+        const approveData = encodeFunctionData({
+          abi: ERC20_APPROVE_ABI,
+          functionName: 'approve',
+          args: [
+            tx.swapData.approvalAddress as `0x${string}`,
+            BigInt(tx.swapData.parsedAmount),
+          ],
+        });
+
+        const approveHash = await walletClient.sendTransaction({
+          account: walletAddress as `0x${string}`,
+          to: tx.swapData.tokenAddress as `0x${string}`,
+          data: approveData,
+        });
+
+        console.log('✅ Approval tx:', approveHash);
+        
+        // Wait a bit for approval to confirm
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+
+      // Step 2: Execute the swap
+      console.log('🔄 Executing swap...');
+      
+      const txHash = await walletClient.sendTransaction({
+        account: walletAddress as `0x${string}`,
+        to: tx.swapData.transactionRequest.to as `0x${string}`,
+        data: tx.swapData.transactionRequest.data as `0x${string}`,
+        value: BigInt(tx.swapData.transactionRequest.value || '0'),
+      });
+
+      console.log('✅ Swap tx:', txHash);
+
       return {
-        success: false,
-        error: errorMessage,
+        success: true,
+        txHash,
+        explorerUrl: getExplorerUrl(txHash),
       };
+    } catch (error: unknown) {
+      console.error('Swap failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return { success: false, error: errorMessage };
     }
   }, [embeddedWallet, walletAddress]);
 
@@ -303,6 +406,8 @@ export default function Home() {
     originalCommand: string;
     txHash?: string;
     status?: 'pending' | 'confirmed' | 'failed';
+    toToken?: string;
+    toAmount?: string;
   }) => {
     try {
       const response = await fetch('/api/transactions/record', {
@@ -320,6 +425,8 @@ export default function Home() {
           language: language,
           txHash: params.txHash,
           status: params.status || 'pending',
+          toToken: params.toToken,
+          toAmount: params.toAmount,
         }),
       });
       const data = await response.json();
@@ -355,19 +462,25 @@ export default function Home() {
     }
   };
 
-  // Handle confirm send
+  // Handle confirm transaction (send or swap)
   const handleConfirmSend = async () => {
     if (!pendingTx) return;
     
     setIsSending(true);
     
     try {
-      const result = await executeTransaction(pendingTx);
+      let result;
+      
+      if (pendingTx.txType === 'swap') {
+        result = await executeSwapTransaction(pendingTx);
+      } else {
+        result = await executeSendTransaction(pendingTx);
+      }
       
       if (result?.success && result.txHash) {
         // Record successful transaction
         await recordTransaction({
-          type: 'send',
+          type: pendingTx.txType,
           amount: pendingTx.amount,
           token: pendingTx.token,
           recipientAddress: pendingTx.recipientAddress,
@@ -375,9 +488,17 @@ export default function Home() {
           originalCommand: pendingTx.originalCommand,
           txHash: result.txHash,
           status: 'confirmed',
+          toToken: pendingTx.toToken,
+          toAmount: pendingTx.toAmount,
         });
 
-        const successText = `✅ Transaction sent!\n\n💸 ${pendingTx.amount} ${pendingTx.token} sent to ${pendingTx.recipientPhone || pendingTx.recipientAddress?.slice(0, 10) + '...'}\n\n🔗 View on BaseScan`;
+        let successText;
+        if (pendingTx.txType === 'swap') {
+          successText = `✅ Swap complete!\n\n🔄 Swapped ${pendingTx.amount} ${pendingTx.token} → ${pendingTx.toAmount} ${pendingTx.toToken}\n\n🔗 View on BaseScan`;
+        } else {
+          successText = `✅ Transaction sent!\n\n💸 ${pendingTx.amount} ${pendingTx.token} sent to ${pendingTx.recipientPhone || pendingTx.recipientAddress?.slice(0, 10) + '...'}\n\n🔗 View on BaseScan`;
+        }
+        
         const translatedSuccess = await translateToUserLanguage(successText);
 
         const successMessage: Message = {
@@ -405,7 +526,7 @@ export default function Home() {
         setMessages(prev => [...prev, errorMessage]);
       }
     } catch (error) {
-      console.error('Send error:', error);
+      console.error('Transaction error:', error);
       const errorText = 'Oops! Something went wrong. Please try again. 😅';
       const translatedError = await translateToUserLanguage(errorText);
       
@@ -441,7 +562,7 @@ export default function Home() {
   const initializeChat = async (selectedLang: string) => {
     setLanguage(selectedLang);
     
-    const welcomeText = "Hi! 👋 I'm Lingo, your AI crypto assistant.\n\nI can help you:\n• Send crypto to phone numbers 📱\n• Check your balance 💰\n• Answer questions 🤔\n\nTry: \"Send 0.001 ETH to 0x...\" or ask me anything!";
+    const welcomeText = "Hi! 👋 I'm Lingo, your AI crypto assistant.\n\nI can help you:\n• Send crypto to phone numbers 📱\n• Swap tokens (ETH ↔ USDC) 🔄\n• Check your balance 💰\n\nTry: \"Swap 0.01 ETH to USDC\" or \"Send 10 USDC to +1234567890\"";
     
     let translatedWelcome = welcomeText;
     if (selectedLang !== 'en') {
@@ -553,8 +674,70 @@ export default function Home() {
 
       let assistantResponse = '';
 
-      // Handle actions
-      if (parsed.action === 'send') {
+      // Handle SWAP action
+      if (parsed.action === 'swap') {
+        const fromToken = parsed.fromToken || parsed.token || 'ETH';
+        const toToken = parsed.toToken || 'USDC';
+        const amount = parsed.amount;
+
+        if (!amount) {
+          assistantResponse = `How much ${fromToken} would you like to swap to ${toToken}?`;
+        } else {
+          // Get swap quote
+          const quoteRes = await fetch('/api/swap/quote', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fromToken,
+              toToken,
+              amount,
+              walletAddress,
+            }),
+          });
+          const quoteData = await quoteRes.json();
+
+          if (quoteData.success && quoteData.quote) {
+            // Get swap execution data
+            const execRes = await fetch('/api/swap/execute', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                fromToken,
+                toToken,
+                amount,
+                walletAddress,
+              }),
+            });
+            const execData = await execRes.json();
+
+            if (execData.success && execData.swap) {
+              setPendingTx({
+                txType: 'swap',
+                amount,
+                token: fromToken,
+                toToken,
+                toAmount: quoteData.quote.toAmount,
+                originalCommand: currentInput,
+                swapData: {
+                  needsApproval: execData.swap.needsApproval,
+                  approvalAddress: execData.swap.approvalAddress,
+                  tokenAddress: execData.swap.tokenAddress,
+                  parsedAmount: execData.swap.parsedAmount,
+                  transactionRequest: execData.swap.transactionRequest,
+                },
+              });
+
+              assistantResponse = `🔄 Ready to swap:\n\n• From: ${amount} ${fromToken}\n• To: ~${quoteData.quote.toAmount} ${toToken}\n• Route: ${quoteData.quote.route}\n\n⚠️ Please confirm to execute on Base chain.`;
+            } else {
+              assistantResponse = `❌ Failed to prepare swap: ${execData.error || 'Unknown error'}`;
+            }
+          } else {
+            assistantResponse = `❌ Failed to get swap quote: ${quoteData.error || 'Unknown error'}\n\nSupported tokens: ETH, USDC, USDT, DAI, WETH`;
+          }
+        }
+      }
+      // Handle SEND action
+      else if (parsed.action === 'send') {
         if (!parsed.recipient) {
           assistantResponse = parsed.response || 'Please provide a phone number or wallet address!';
         } else if (parsed.recipient.includes('+')) {
@@ -576,6 +759,7 @@ export default function Home() {
               assistantResponse = `How much ${parsed.token || 'USDC'} would you like to send to ${parsed.recipient}?`;
             } else {
               setPendingTx({
+                txType: 'send',
                 amount: parsed.amount,
                 token: parsed.token || 'USDC',
                 recipient: parsed.recipient,
@@ -603,6 +787,7 @@ export default function Home() {
             assistantResponse = `How much ${parsed.token || 'ETH'} would you like to send to ${parsed.recipient.slice(0, 10)}...?`;
           } else {
             setPendingTx({
+              txType: 'send',
               amount: parsed.amount,
               token: parsed.token || 'ETH',
               recipient: parsed.recipient,
@@ -616,7 +801,7 @@ export default function Home() {
           assistantResponse = `❌ Invalid address format. Please provide a valid wallet address (0x...) or phone number (+1...).`;
         }
       } else if (parsed.action === 'buy') {
-        assistantResponse = `${parsed.response}\n\n💰 Purchase:\n• ${parsed.amount} ${parsed.token}\n\n🔜 DEX integration coming soon!`;
+        assistantResponse = `${parsed.response}\n\n💡 Tip: Use "swap" instead! Try: "Swap 0.01 ETH to USDC"`;
       } else if (parsed.action === 'balance') {
         assistantResponse = `${parsed.response}`;
       } else if (parsed.action === 'chat') {
@@ -817,7 +1002,9 @@ export default function Home() {
                   <Bot className="w-5 h-5" />
                 </div>
                 <div className="bg-purple-900/40 border border-yellow-400/40 rounded-2xl px-4 py-3">
-                  <div className="text-sm mb-3">⚠️ Confirm Transaction</div>
+                  <div className="text-sm mb-3">
+                    {pendingTx.txType === 'swap' ? '🔄 Confirm Swap' : '⚠️ Confirm Transaction'}
+                  </div>
                   <div className="flex gap-2">
                     <button
                       onClick={handleConfirmSend}
@@ -827,7 +1014,7 @@ export default function Home() {
                       {isSending ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
-                          Sending...
+                          {pendingTx.txType === 'swap' ? 'Swapping...' : 'Sending...'}
                         </>
                       ) : (
                         '✅ Confirm'

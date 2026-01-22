@@ -1,251 +1,184 @@
+// app/api/parse-command/route.ts
+// Parse natural language commands for send, swap, balance, etc.
+
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function POST(request: NextRequest) {
+export async function POST(req: NextRequest) {
   try {
-    const { command, language } = await request.json();
-    const parsed = parseCommandWithElizaPersonality(command, language);
-    return NextResponse.json(parsed);
-  } catch (error: unknown) {
-    console.error('Parse error:', error);
-    return NextResponse.json({ 
+    const { command, language } = await req.json();
+
+    if (!command) {
+      return NextResponse.json({ 
+        action: 'chat', 
+        response: 'Please type a command or question!' 
+      });
+    }
+
+    const lowerCommand = command.toLowerCase();
+
+    // ========== SWAP DETECTION ==========
+    // Patterns: "swap X ETH to USDC", "exchange 0.1 ETH for USDC", "convert ETH to USDC"
+    const swapPatterns = [
+      /swap\s+(\d+\.?\d*)\s*(\w+)\s+(?:to|for|into)\s+(\w+)/i,
+      /exchange\s+(\d+\.?\d*)\s*(\w+)\s+(?:to|for|into)\s+(\w+)/i,
+      /convert\s+(\d+\.?\d*)\s*(\w+)\s+(?:to|for|into)\s+(\w+)/i,
+      /trade\s+(\d+\.?\d*)\s*(\w+)\s+(?:to|for|into)\s+(\w+)/i,
+      /(\d+\.?\d*)\s*(\w+)\s+(?:to|for|into)\s+(\w+)/i,
+    ];
+
+    for (const pattern of swapPatterns) {
+      const match = lowerCommand.match(pattern);
+      if (match) {
+        const amount = match[1];
+        const fromToken = match[2].toUpperCase();
+        const toToken = match[3].toUpperCase();
+
+        // Validate tokens
+        const validTokens = ['ETH', 'USDC', 'USDT', 'DAI', 'WETH'];
+        if (validTokens.includes(fromToken) && validTokens.includes(toToken)) {
+          return NextResponse.json({
+            action: 'swap',
+            fromToken,
+            toToken,
+            amount,
+            response: `Preparing to swap ${amount} ${fromToken} to ${toToken}...`,
+          });
+        }
+      }
+    }
+
+    // Check for swap intent without amount
+    if (lowerCommand.includes('swap') || lowerCommand.includes('exchange') || lowerCommand.includes('convert')) {
+      // Try to extract tokens
+      const tokenMatch = lowerCommand.match(/(\w+)\s+(?:to|for|into)\s+(\w+)/i);
+      if (tokenMatch) {
+        const fromToken = tokenMatch[1].toUpperCase();
+        const toToken = tokenMatch[2].toUpperCase();
+        const validTokens = ['ETH', 'USDC', 'USDT', 'DAI', 'WETH'];
+        
+        if (validTokens.includes(fromToken) && validTokens.includes(toToken)) {
+          return NextResponse.json({
+            action: 'swap',
+            fromToken,
+            toToken,
+            amount: null,
+            response: `How much ${fromToken} would you like to swap to ${toToken}?`,
+          });
+        }
+      }
+
+      return NextResponse.json({
+        action: 'chat',
+        response: `🔄 To swap tokens, try:\n\n• "Swap 0.01 ETH to USDC"\n• "Exchange 100 USDC for ETH"\n\nSupported tokens: ETH, USDC, USDT, DAI, WETH`,
+      });
+    }
+
+    // ========== SEND DETECTION ==========
+    // Patterns for sending crypto
+    const sendPatterns = [
+      /send\s+(\d+\.?\d*)\s*(\w+)\s+to\s+(\+[\d\-\s]+|0x[a-fA-F0-9]{40})/i,
+      /transfer\s+(\d+\.?\d*)\s*(\w+)\s+to\s+(\+[\d\-\s]+|0x[a-fA-F0-9]{40})/i,
+      /pay\s+(\d+\.?\d*)\s*(\w+)\s+to\s+(\+[\d\-\s]+|0x[a-fA-F0-9]{40})/i,
+    ];
+
+    for (const pattern of sendPatterns) {
+      const match = command.match(pattern);
+      if (match) {
+        const amount = match[1];
+        const token = match[2].toUpperCase();
+        const recipient = match[3].replace(/[\s\-]/g, '');
+
+        return NextResponse.json({
+          action: 'send',
+          amount,
+          token,
+          recipient,
+          response: `Preparing to send ${amount} ${token}...`,
+        });
+      }
+    }
+
+    // Check for send intent without full details
+    if (lowerCommand.includes('send') || lowerCommand.includes('transfer') || lowerCommand.includes('pay')) {
+      // Try to extract what we can
+      const amountMatch = lowerCommand.match(/(\d+\.?\d*)\s*(eth|usdc|usdt|dai)/i);
+      const addressMatch = command.match(/(0x[a-fA-F0-9]{40})/);
+      const phoneMatch = command.match(/(\+[\d\-\s]{10,})/);
+
+      const amount = amountMatch?.[1] || null;
+      const token = amountMatch?.[2]?.toUpperCase() || 'ETH';
+      const recipient = addressMatch?.[1] || phoneMatch?.[1]?.replace(/[\s\-]/g, '') || null;
+
+      if (recipient) {
+        return NextResponse.json({
+          action: 'send',
+          amount,
+          token,
+          recipient,
+          response: amount 
+            ? `Preparing to send ${amount} ${token}...`
+            : `How much ${token} would you like to send?`,
+        });
+      }
+
+      return NextResponse.json({
+        action: 'send',
+        amount,
+        token,
+        recipient: null,
+        response: '📤 To send crypto, include a wallet address (0x...) or phone number (+1...).\n\nExample: "Send 10 USDC to +1234567890"',
+      });
+    }
+
+    // ========== BALANCE CHECK ==========
+    if (lowerCommand.includes('balance') || lowerCommand.includes('how much') || lowerCommand.includes('what do i have')) {
+      return NextResponse.json({
+        action: 'balance',
+        response: '💰 Your balance is shown above! I display your ETH and USDC balances on Base chain.',
+      });
+    }
+
+    // ========== BUY DETECTION ==========
+    if (lowerCommand.includes('buy')) {
+      const buyMatch = lowerCommand.match(/buy\s+(\d+\.?\d*)?\s*(eth|usdc|usdt|bitcoin|btc)?/i);
+      const amount = buyMatch?.[1] || '0.01';
+      const token = buyMatch?.[2]?.toUpperCase() || 'ETH';
+
+      return NextResponse.json({
+        action: 'buy',
+        amount,
+        token,
+        response: `💡 To buy ${token}, use the swap feature!\n\nTry: "Swap USDC to ${token}"`,
+      });
+    }
+
+    // ========== HELP ==========
+    if (lowerCommand.includes('help') || lowerCommand.includes('what can you do')) {
+      return NextResponse.json({
+        action: 'chat',
+        response: `🤖 I'm Lingo! Here's what I can do:\n\n📤 **Send crypto:**\n"Send 10 USDC to +1234567890"\n"Send 0.01 ETH to 0x..."\n\n🔄 **Swap tokens:**\n"Swap 0.1 ETH to USDC"\n"Exchange 50 USDC for ETH"\n\n💰 **Check balance:**\n"What's my balance?"\n\nSupported tokens: ETH, USDC, USDT, DAI, WETH`,
+      });
+    }
+
+    // ========== GREETINGS ==========
+    if (lowerCommand.match(/^(hi|hello|hey|hola|bonjour|namaste)/i)) {
+      return NextResponse.json({
+        action: 'chat',
+        response: `Hey there! 👋 I'm Lingo, your crypto assistant.\n\nTry:\n• "Swap 0.01 ETH to USDC"\n• "Send 10 USDC to +1234567890"\n• "What's my balance?"`,
+      });
+    }
+
+    // ========== DEFAULT CHAT ==========
+    return NextResponse.json({
       action: 'chat',
-      response: 'Sorry, I had trouble understanding that. Try asking me to send crypto or check your balance!',
-      confidence: 0.1,
+      response: `I'm not sure what you mean. Try:\n\n🔄 "Swap 0.1 ETH to USDC"\n📤 "Send 10 USDC to +1234567890"\n💰 "What's my balance?"\n\nOr type "help" for more options!`,
+    });
+
+  } catch (error) {
+    console.error('Parse error:', error);
+    return NextResponse.json({
+      action: 'chat',
+      response: 'Sorry, I had trouble understanding that. Please try again!',
     });
   }
-}
-
-function parseCommandWithElizaPersonality(command: string, language?: string) {
-  const lower = command.toLowerCase();
-  
-  // GREETINGS
-  if (lower.match(/^(hello|hi|hey|hola|bonjour|नमस्ते|namaste)\b/)) {
-    return {
-      action: 'chat',
-      response: `Hello! 👋 I'm Lingo, your friendly crypto wallet assistant!
-
-I can help you:
-- Send crypto to phone numbers or wallet addresses
-- Check your balance
-- Answer questions about crypto
-
-What would you like to do today? 😊`,
-      confidence: 0.95,
-    };
-  }
-  
-  // HELP / HOW QUESTIONS
-  if (lower.includes('how') || lower.includes('what') || lower.includes('explain') || 
-      lower.includes('कैसे') || lower.includes('क्या') || lower.includes('cómo') || 
-      lower.includes('qué') || lower.includes('comment') || lower.includes('quoi')) {
-    
-    // How does this work / how to use
-    if (lower.includes('work') || lower.includes('use') || lower.includes('start') ||
-        lower.includes('काम') || lower.includes('funciona') || lower.includes('fonctionne')) {
-      return {
-        action: 'chat',
-        response: `Great question! Here's how Lingo Wallet works: 🌍
-
-📱 **Send to Phone Numbers:**
-   You can send crypto to anyone using just their phone number!
-   - If they have a wallet: instant transfer
-   - If they don't: they get an SMS to claim it
-
-💰 **Check Balance:**
-   See your ETH and USDC on Base chain
-
-🗣️ **Multi-Language:**
-   Talk to me in English, Hindi, Spanish, or French!
-
-Try: "Send 50 USDC to +1-555-1234" or "Check my balance" 🚀`,
-        confidence: 0.95,
-      };
-    }
-    
-    // Phone number feature
-    if (lower.includes('phone') || lower.includes('फोन') || lower.includes('teléfono') || lower.includes('téléphone') || lower.includes('number')) {
-      return {
-        action: 'chat',
-        response: `The phone number feature is my favorite! 📱✨
-
-Here's how it works:
-1️⃣ You say: "Send 50 USDC to +1-555-1234"
-2️⃣ I check if they have Lingo Wallet
-3️⃣ If YES: Send directly to their wallet
-4️⃣ If NO: Create a claim link & send SMS
-5️⃣ They click, create wallet, claim crypto!
-
-It's crypto made as easy as texting! 🎉
-
-Try it now with a friend's number!`,
-        confidence: 0.95,
-      };
-    }
-
-    // What can you do
-    if (lower.includes('can you') || lower.includes('what do') || lower.includes('features') || lower.includes('capabilities')) {
-      return {
-        action: 'chat',
-        response: `I can do lots of things! Here's what I'm best at: 🤖
-
-✅ **Send Crypto to Phone Numbers**
-   "Send 50 USDC to +1-555-1234"
-
-✅ **Send to Wallet Addresses**
-   "Send 0.01 ETH to 0x..."
-
-✅ **Check Your Balance**
-   "What's my balance?" or "Check balance"
-
-✅ **Multi-Language Support**
-   Talk to me in Hindi, Spanish, French, or English!
-
-✅ **Answer Questions**
-   Ask me anything about crypto or how to use me!
-
-🔜 Coming Soon:
-   • Buy crypto
-   • Swap tokens
-   • Multi-chain support
-
-What would you like to try first? 😊`,
-        confidence: 0.95,
-      };
-    }
-  }
-  
-  // SEND command - check this BEFORE other patterns
-  if (lower.includes('send') || lower.includes('transfer') || lower.includes('भेज') || 
-      lower.includes('enviar') || lower.includes('envoyer')) {
-    
-    // Match amount and token - flexible regex that handles spaces
-    // Matches: "0.0001 eth", "0.0001eth", "50 usdc", etc.
-    const amountMatch = command.match(/(\d+\.?\d*)\s*(usdc|eth|matic|btc|usd)/i);
-    
-    // Also try matching amount alone if token comes later
-    const amountOnlyMatch = command.match(/(\d+\.?\d*)/);
-    
-    // Detect token from command
-    const tokenMatch = lower.match(/\b(usdc|eth|matic|btc)\b/);
-    
-    // Match phone number OR wallet address
-    const phoneMatch = command.match(/\+[\d\s\-()]+/);
-    const walletMatch = command.match(/0x[a-fA-F0-9]{40}/);
-    
-    // Get amount - prefer full match, fallback to amount only
-    const amount = amountMatch ? amountMatch[1] : (amountOnlyMatch ? amountOnlyMatch[1] : null);
-    
-    // Get token - prefer from amount match, then from separate token match, default to ETH
-    const token = amountMatch ? amountMatch[2].toUpperCase() : 
-                  (tokenMatch ? tokenMatch[1].toUpperCase() : 'ETH');
-    
-    // Prefer wallet address if found, otherwise phone
-    const recipient = walletMatch ? walletMatch[0] : (phoneMatch ? phoneMatch[0].trim() : null);
-    
-    console.log('Parse result:', { amount, token, recipient, command });
-    
-    return {
-      action: 'send',
-      amount,
-      token,
-      recipient,
-      response: recipient 
-        ? `I'll help you send ${amount} ${token} to ${recipient.startsWith('0x') ? recipient.slice(0, 10) + '...' : recipient}! 🚀`
-        : `I'd love to help you send ${amount || 'some'} ${token}! Just tell me the phone number or wallet address. 😊`,
-      confidence: recipient && amount ? 0.9 : 0.6,
-    };
-  }
-
-  // Handle standalone wallet address (user might send address after being asked)
-  const standaloneWallet = command.match(/^(0x[a-fA-F0-9]{40})$/);
-  if (standaloneWallet) {
-    return {
-      action: 'send',
-      amount: null,
-      token: 'ETH',
-      recipient: standaloneWallet[1],
-      response: `Got the address! How much would you like to send to ${standaloneWallet[1].slice(0, 10)}...? 💸`,
-      confidence: 0.7,
-    };
-  }
-  
-  // BUY command
-  if (lower.includes('buy') || lower.includes('purchase') || lower.includes('खरीद') || 
-      lower.includes('comprar') || lower.includes('acheter')) {
-    const amountMatch = command.match(/(\d+\.?\d*)\s*(usdc|eth|matic|btc)/i);
-    
-    const amount = amountMatch ? amountMatch[1] : null;
-    const token = amountMatch ? amountMatch[2].toUpperCase() : 'ETH';
-    
-    return {
-      action: 'buy',
-      amount,
-      token,
-      response: amount
-        ? `Great choice! I'll help you buy ${amount} ${token}. 💰 (DEX integration coming soon!)`
-        : `I can help you buy crypto! How much ${token} would you like? 🚀`,
-      confidence: amount ? 0.9 : 0.7,
-    };
-  }
-  
-  // BALANCE command
-  if (lower.includes('balance') || lower.includes('बैलेंस') || lower.includes('saldo') || 
-      lower.includes('solde') || lower.includes('how much') || lower.includes('check')) {
-    return {
-      action: 'balance',
-      response: "Let me check your wallet balance for you! 💼 Look at the balance card above ✨",
-      confidence: 0.95,
-    };
-  }
-  
-  // THANKS
-  if (lower.includes('thank') || lower.includes('thanks') || lower.includes('धन्यवाद') || 
-      lower.includes('gracias') || lower.includes('merci')) {
-    return {
-      action: 'chat',
-      response: `You're very welcome! 😊 I'm always here to help you with your crypto needs! 💰
-
-Need anything else?`,
-      confidence: 0.95,
-    };
-  }
-
-  // WHO ARE YOU / ABOUT
-  if (lower.includes('who are you') || lower.includes('what are you') || lower.includes('about')) {
-    return {
-      action: 'chat',
-      response: `Hi! I'm Lingo 🤖, your AI crypto wallet assistant!
-
-I was created to make crypto accessible to everyone, in every language. 🌍
-
-My superpowers:
-✨ Send crypto using phone numbers or wallet addresses
-✨ Understand multiple languages
-✨ Help beginners get started with crypto
-✨ Make crypto as easy as texting!
-
-Ask me anything or try sending some crypto! 💰`,
-      confidence: 0.95,
-    };
-  }
-  
-  // DEFAULT - General chat or didn't understand
-  return {
-    action: 'chat',
-    response: `I'm here to help! 🤖 I understand:
-
-💸 **Send crypto:**
-   "Send 50 USDC to +1-555-1234"
-   "Send 0.01 ETH to 0x..."
-
-💰 **Check balance:**
-   "What's my balance?"
-
-❓ **Ask questions:**
-   "How does this work?"
-   "What can you do?"
-
-Try any of these, in any language! 🌍`,
-    confidence: 0.5,
-  };
 }
