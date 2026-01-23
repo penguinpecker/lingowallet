@@ -427,7 +427,7 @@ export async function executeSwap(
         abi: ERC20_ABI,
         functionName: 'allowance',
         args: [fromAddress as Address, data.transactionRequest.to as Address],
-      });
+      }) as bigint;
       
       if (allowance < BigInt(parsedAmount)) {
         console.log('📝 Approving token spend...');
@@ -525,7 +525,7 @@ export async function getBalance(
       abi: ERC20_ABI,
       functionName: 'balanceOf',
       args: [address as Address],
-    });
+    }) as bigint;
     
     return formatUnits(balance, tokenInfo.decimals);
   } catch (error) {
