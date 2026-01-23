@@ -4,7 +4,6 @@
 
 import { 
   createPublicClient, 
-  createWalletClient, 
   http, 
   parseEther, 
   parseUnits,
@@ -182,8 +181,17 @@ export async function transferETH(
     console.log(`📤 Transferring ${amount} ETH to ${to} on ${chainName}`);
     
     const value = parseEther(amount);
+    const account = signer.account;
+    
+    if (!account) {
+      return {
+        success: false,
+        error: 'No account connected to signer',
+      };
+    }
     
     const hash = await signer.sendTransaction({
+      account,
       to,
       value,
       chain: SUPPORTED_CHAINS[chainName.toLowerCase()] || base,
@@ -219,8 +227,17 @@ export async function transferToken(
     
     const parsedAmount = parseUnits(amount, decimals);
     const chain = SUPPORTED_CHAINS[chainName.toLowerCase()] || base;
+    const account = signer.account;
+    
+    if (!account) {
+      return {
+        success: false,
+        error: 'No account connected to signer',
+      };
+    }
     
     const hash = await signer.writeContract({
+      account,
       address: tokenAddress,
       abi: ERC20_ABI,
       functionName: 'transfer',
@@ -357,6 +374,11 @@ export async function executeSwap(
   try {
     console.log(`🔄 Executing swap: ${fromAmount} ${fromToken} → ${toToken}`);
     
+    const account = signer.account;
+    if (!account) {
+      return { success: false, error: 'No account connected to signer' };
+    }
+    
     // Get chain IDs
     const fromChainId = SUPPORTED_CHAINS[fromChain.toLowerCase()]?.id || 8453;
     const toChainId = SUPPORTED_CHAINS[toChain.toLowerCase()]?.id || fromChainId;
@@ -410,6 +432,7 @@ export async function executeSwap(
       if (allowance < BigInt(parsedAmount)) {
         console.log('📝 Approving token spend...');
         const approveHash = await signer.writeContract({
+          account,
           address: fromTokenInfo.address,
           abi: ERC20_ABI,
           functionName: 'approve',
@@ -425,6 +448,7 @@ export async function executeSwap(
     
     // Execute the swap
     const hash = await signer.sendTransaction({
+      account,
       to: data.transactionRequest.to as Address,
       data: data.transactionRequest.data as `0x${string}`,
       value: BigInt(data.transactionRequest.value || '0'),
