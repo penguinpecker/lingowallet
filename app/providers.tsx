@@ -25,7 +25,9 @@ export default function Providers({ children }: { children: React.ReactNode }) {
           accentColor: '#9333EA',
         },
         embeddedWallets: {
-          createOnLogin: 'users-without-wallets',
+          ethereum: {
+            createOnLogin: 'users-without-wallets',
+          },
           requireUserPasswordOnCreate: false,
         },
       }}
