@@ -12,8 +12,10 @@ export const CHAINS = {
   base: 8453,
 } as const;
 
+type ChainId = typeof CHAINS[keyof typeof CHAINS];
+
 // Token addresses per chain
-export const TOKENS = {
+export const TOKENS: Record<string, Record<ChainId, string>> = {
   // ETH (native) - use zero address
   ETH: {
     [CHAINS.ethereum]: '0x0000000000000000000000000000000000000000',
@@ -30,7 +32,7 @@ export const TOKENS = {
     [CHAINS.optimism]: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
     [CHAINS.base]: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
   },
-} as const;
+};
 
 export interface BridgeQuote {
   id: string;
@@ -80,8 +82,14 @@ export async function getBridgeQuote(
   toAddress: string = fromAddress
 ): Promise<BridgeQuote | null> {
   try {
-    const fromTokenAddress = TOKENS[fromToken as keyof typeof TOKENS]?.[fromChainId as keyof typeof CHAINS];
-    const toTokenAddress = TOKENS[fromToken as keyof typeof TOKENS]?.[CHAINS.base];
+    const tokenAddresses = TOKENS[fromToken];
+    if (!tokenAddresses) {
+      console.error('Token not supported');
+      return null;
+    }
+
+    const fromTokenAddress = tokenAddresses[fromChainId as ChainId];
+    const toTokenAddress = tokenAddresses[CHAINS.base];
 
     if (!fromTokenAddress || !toTokenAddress) {
       console.error('Token not supported on this chain');
@@ -122,8 +130,13 @@ export async function getBridgeRoutes(
   fromAddress: string
 ) {
   try {
-    const fromTokenAddress = TOKENS[fromToken as keyof typeof TOKENS]?.[fromChainId as keyof typeof CHAINS];
-    const toTokenAddress = TOKENS[fromToken as keyof typeof TOKENS]?.[CHAINS.base];
+    const tokenAddresses = TOKENS[fromToken];
+    if (!tokenAddresses) {
+      return null;
+    }
+
+    const fromTokenAddress = tokenAddresses[fromChainId as ChainId];
+    const toTokenAddress = tokenAddresses[CHAINS.base];
 
     const response = await fetch(`${LIFI_API_URL}/routes`, {
       method: 'POST',
